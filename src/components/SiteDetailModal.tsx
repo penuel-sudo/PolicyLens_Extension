@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from "react";
 import { X, ExternalLink, Star, ChevronDown, Info } from "lucide-react";
 import { loadModalPrefs, loadModalPrefsFromDb, type ModalDisplayPrefs } from "../lib/modalPrefs";
+import { loadConcerns } from "../lib/userPrefs";
+import { getDomainWithDocuments, type PolicyClause, type TopFinding } from "../lib/policyData";
 import { RiskBadge, RiskDot } from "./RiskUI";
 import type { Risk } from "./RiskUI";
 
 // ─── types ────────────────────────────────────────────────────────────────────
-type ModalTab = "overview" | "clauses";
+type ModalTab = "overview" | "clauses" | "privacy" | "terms";
 
 export interface SiteRowData {
   site:    string;
@@ -29,6 +31,26 @@ interface Clause {
   detail: { short: string; medium: string; full: string };
   cat:    string;
   isNew?: boolean;
+}
+
+function toModalRisk(input: string): Risk {
+  if (input === "high" || input === "med" || input === "low") return input;
+  return "low";
+}
+
+function mapLiveClause(clause: PolicyClause, idx: number): Clause {
+  return {
+    id: idx + 1,
+    level: toModalRisk(clause.risk),
+    text: clause.text,
+    cat: clause.category,
+    isNew: !!clause.is_new || !!clause.is_updated,
+    detail: {
+      short: clause.why_it_matters,
+      medium: clause.why_it_matters,
+      full: clause.why_it_matters,
+    },
+  };
 }
 
 // ─── design tokens ────────────────────────────────────────────────────────────
@@ -263,6 +285,13 @@ function ClauseCard({
 export default function SiteDetailModal({ site, onClose, onSaveToggle }: SiteDetailModalProps) {
   const [tab,   setTab]   = useState<ModalTab>("overview");
   const [saved, setSaved] = useState(!!site.saved);
+  const [liveDocs, setLiveDocs] = useState<Record<string, Clause[]>>({});
+  const [liveSummary, setLiveSummary] = useState<string | null>(null);
+  const [liveTopFindings, setLiveTopFindings] = useState<TopFinding[]>([]);
+  const [liveDocsFound, setLiveDocsFound] = useState<string[]>([]);
+  const [activeDocType, setActiveDocType] = useState<"privacy" | "terms" | null>(null);
+  const [liveRiskScore, setLiveRiskScore] = useState<number | null>(null);
+  const [liveRiskLevel, setLiveRiskLevel] = useState<Risk | null>(null);
   // Start from localStorage immediately; swap to DB version once fetched
   const [prefs, setPrefs] = useState<ModalDisplayPrefs>(loadModalPrefs());
 
@@ -275,21 +304,93 @@ export default function SiteDetailModal({ site, onClose, onSaveToggle }: SiteDet
       .catch(() => { /* keep localStorage prefs */ });
   }, []);
 
+  useEffect(() => {
+    let mounted = true;
+    getDomainWithDocuments(site.site)
+      .then((payload) => {
+        if (!mounted || !payload) return;
+
+        const nextDocs: Record<string, Clause[]> = {};
+        payload.documents.forEach((doc) => {
+          const mapped = (doc.clauses || []).map(mapLiveClause);
+          nextDocs[doc.doc_type] = mapped;
+        });
+
+        setLiveDocs(nextDocs);
+        setLiveDocsFound(payload.domain.docs_found || []);
+        setLiveSummary(payload.domain.overall_summary || null);
+        setLiveTopFindings(Array.isArray(payload.domain.top_findings) ? payload.domain.top_findings : []);
+        setLiveRiskScore(Number(payload.domain.overall_risk_score || 0));
+        setLiveRiskLevel(toModalRisk(payload.domain.overall_risk_level));
+
+        if ((payload.domain.docs_found || []).includes("privacy") && (payload.domain.docs_found || []).includes("terms")) {
+          setActiveDocType("privacy");
+          setTab("privacy");
+        } else if ((payload.domain.docs_found || []).includes("privacy")) {
+          setActiveDocType("privacy");
+          setTab("clauses");
+        } else if ((payload.domain.docs_found || []).includes("terms")) {
+          setActiveDocType("terms");
+          setTab("clauses");
+        }
+      })
+      .catch(() => {})
+      .finally(() => {});
+
+    return () => {
+      mounted = false;
+    };
+  }, [site.site]);
+
   // Derived layout vars from prefs
   const fs      = ({ small: 11.5, medium: 13, large: 15 } as const)[prefs.fontSize] ?? 13;
   const vPad    = prefs.compactMode ? "10px 16px" : "14px 18px";
   const bodyPad = prefs.compactMode ? "18px 22px" : "24px 28px";
 
   // Clause visibility filter
-  const all: Clause[] = [...CLAUSES.high, ...CLAUSES.med, ...CLAUSES.low];
-  const visible = all.filter(c => {
+  const selectedDocType = tab === "privacy" || tab === "terms" ? tab : activeDocType;
+  const liveClausesForTab = selectedDocType && liveDocs[selectedDocType] ? liveDocs[selectedDocType] : [];
+  const allLiveClauses = Object.values(liveDocs).flat();
+  const baseClauses: Clause[] =
+    tab === "privacy" || tab === "terms"
+      ? (liveClausesForTab.length ? liveClausesForTab : allLiveClauses)
+      : (allLiveClauses.length ? allLiveClauses : [...CLAUSES.high, ...CLAUSES.med, ...CLAUSES.low]);
+  const visible = baseClauses.filter(c => {
     if (prefs.riskLevel === "high")   return c.level === "high";
     if (prefs.riskLevel === "medium") return c.level !== "low";
     return true;
   });
 
-  const riskScore = site.risk === "high" ? 82 : site.risk === "med" ? 51 : 22;
-  const newCount  = CLAUSES[site.risk].filter(c => c.isNew).length;
+  const riskLevel = liveRiskLevel || site.risk;
+  const riskScore = Number.isFinite(liveRiskScore || NaN)
+    ? Number(liveRiskScore)
+    : riskLevel === "high"
+    ? 82
+    : riskLevel === "med"
+    ? 51
+    : 22;
+  const newCount  = visible.filter(c => c.isNew).length;
+
+  const concerns = loadConcerns();
+  const activeConcernTags = new Set(
+    Object.keys(concerns)
+      .filter((k) => concerns[k])
+      .map((k) => k.split("::")[1]?.toLowerCase().trim())
+      .filter(Boolean),
+  );
+
+  const topFindingsFromLive = (liveTopFindings || [])
+    .filter((f) => {
+      if (!activeConcernTags.size) return true;
+      return activeConcernTags.has(String(f.category || "").toLowerCase().trim());
+    })
+    .sort((a, b) => {
+      const ar = toModalRisk(a.risk);
+      const br = toModalRisk(b.risk);
+      const p = { high: 3, med: 2, low: 1 } as const;
+      return p[br] - p[ar];
+    })
+    .slice(0, 3);
 
   // Auto-expand clauses tab on open if setting is on
   useEffect(() => {
@@ -370,18 +471,18 @@ export default function SiteDetailModal({ site, onClose, onSaveToggle }: SiteDet
             <div style={{
               width: 42, height: 42, borderRadius: 11, flexShrink: 0,
               background:
-                site.risk === "high" ? "#FEF2F2"
-                : site.risk === "med"  ? "#FFFBEB"
+                riskLevel === "high" ? "#FEF2F2"
+                : riskLevel === "med"  ? "#FFFBEB"
                 : "#D4E8DC",
               border: `1.5px solid ${
-                site.risk === "high" ? "#FECACA"
-                : site.risk === "med"  ? "#FDE68A"
+                riskLevel === "high" ? "#FECACA"
+                : riskLevel === "med"  ? "#FDE68A"
                 : "#A8C8B5"
               }`,
               display: "flex", alignItems: "center", justifyContent: "center",
             }}>
               {/* a large dot in the box matches the clause-dot aesthetic */}
-              <RiskDot level={site.risk} size={14} marginTop={0} />
+              <RiskDot level={riskLevel} size={14} marginTop={0} />
             </div>
 
             <div style={{ flex: 1, minWidth: 0 }}>
@@ -392,7 +493,7 @@ export default function SiteDetailModal({ site, onClose, onSaveToggle }: SiteDet
                 {site.site}
               </h2>
               <p style={{ margin: "3px 0 0", fontSize: 11.5, color: P.chocoMid, fontWeight: 400 }}>
-                {site.type} · Scanned {site.date}
+                {liveDocsFound.length ? `${liveDocsFound.join(" + ")} docs` : site.type} · Scanned {site.date}
               </p>
             </div>
 
@@ -441,7 +542,7 @@ export default function SiteDetailModal({ site, onClose, onSaveToggle }: SiteDet
                   RISK SCORE
                 </span>
                 <span style={{
-                  fontSize: 10, fontWeight: 700, color: rBar(site.risk),
+                  fontSize: 10, fontWeight: 700, color: rBar(riskLevel),
                   fontFamily: "'DM Mono', monospace",
                 }}>
                   {riskScore}/100
@@ -453,7 +554,7 @@ export default function SiteDetailModal({ site, onClose, onSaveToggle }: SiteDet
               }}>
                 <div style={{
                   height: "100%", width: `${riskScore}%`,
-                  background: `linear-gradient(90deg, ${rBar(site.risk)}88, ${rBar(site.risk)})`,
+                  background: `linear-gradient(90deg, ${rBar(riskLevel)}88, ${rBar(riskLevel)})`,
                   borderRadius: 99, transition: "width 0.5s cubic-bezier(0.22,1,0.36,1)",
                 }} />
               </div>
@@ -462,10 +563,17 @@ export default function SiteDetailModal({ site, onClose, onSaveToggle }: SiteDet
 
           {/* tab strip */}
           <div style={{ display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
-            {(["overview", "clauses"] as ModalTab[]).map(t => (
+            {(
+              liveDocsFound.includes("privacy") && liveDocsFound.includes("terms")
+                ? (["overview", "privacy", "terms"] as ModalTab[])
+                : (["overview", "clauses"] as ModalTab[])
+            ).map(t => (
               <button
                 key={t}
-                onClick={() => setTab(t)}
+                onClick={() => {
+                  setTab(t);
+                  if (t === "privacy" || t === "terms") setActiveDocType(t);
+                }}
                 className="sdm-tab"
                 style={{
                   padding: "8px 16px", border: "none", cursor: "pointer",
@@ -477,15 +585,15 @@ export default function SiteDetailModal({ site, onClose, onSaveToggle }: SiteDet
                 }}
               >
                 {t}
-                {t === "clauses" && (
+                {(t === "clauses" || t === "privacy" || t === "terms") && (
                   <span style={{
                     marginLeft: 6, fontSize: 10, fontWeight: 700,
                     padding: "2px 6px", borderRadius: 99,
-                    background: tab === "clauses"
-                      ? (site.risk === "high" ? "#FEF2F2" : site.risk === "med" ? "#FFFBEB" : "#D4E8DC")
+                    background: tab === t
+                      ? (riskLevel === "high" ? "#FEF2F2" : riskLevel === "med" ? "#FFFBEB" : "#D4E8DC")
                       : "rgba(74,46,28,0.10)",
-                    color: tab === "clauses"
-                      ? (site.risk === "high" ? "#DC2626" : site.risk === "med" ? "#B45309" : "#3D6B4F")
+                    color: tab === t
+                      ? (riskLevel === "high" ? "#DC2626" : riskLevel === "med" ? "#B45309" : "#3D6B4F")
                       : P.chocoLight,
                   }}>
                     {visible.length}
@@ -495,7 +603,7 @@ export default function SiteDetailModal({ site, onClose, onSaveToggle }: SiteDet
             ))}
             {/* risk badge — right end of tab strip */}
             <span style={{ marginLeft: "auto" }}>
-              <RiskBadge risk={site.risk} />
+              <RiskBadge risk={riskLevel} />
             </span>          </div>
         </div>
 
@@ -516,8 +624,8 @@ export default function SiteDetailModal({ site, onClose, onSaveToggle }: SiteDet
               <div style={{ display: "flex", gap: 10 }}>
                 {[
                   { label: "Clauses",    value: site.clauses.toString() },
-                  { label: "Risk Level", value: site.risk.toUpperCase() },
-                  { label: "Type",       value: site.type.split(" ")[0] },
+                  { label: "Risk Level", value: riskLevel.toUpperCase() },
+                  { label: "Type",       value: liveDocsFound.length ? liveDocsFound.join("+") : site.type.split(" ")[0] },
                   { label: "New",        value: newCount > 0 ? `${newCount} new` : "None" },
                 ].map(({ label, value }) => (
                   <div key={label} style={{
@@ -564,17 +672,7 @@ export default function SiteDetailModal({ site, onClose, onSaveToggle }: SiteDet
                   fontSize: 13, color: P.choco, lineHeight: 1.7,
                   fontFamily: "'DM Sans', sans-serif", margin: 0,
                 }}>
-                  {site.site}'s policy contains{" "}
-                  <strong>{site.clauses} flagged clauses</strong>{" "}
-                  across {Math.max(2, Math.ceil(site.clauses / 3))} categories. The{" "}
-                  <strong>{site.risk} risk</strong> rating reflects{" "}
-                  {site.risk === "high"
-                    ? "significant data sharing and retention concerns."
-                    : site.risk === "med"
-                    ? "moderate concerns around consent and notifications."
-                    : "low-impact standard practices."}
-                  {newCount > 0 &&
-                    ` ${newCount} clause${newCount > 1 ? "s" : ""} flagged as recently updated.`}
+                  {liveSummary || `${site.site}'s policy contains ${site.clauses} flagged clauses and currently has ${riskLevel} risk level.`}
                 </p>
               </div>
 
@@ -588,7 +686,14 @@ export default function SiteDetailModal({ site, onClose, onSaveToggle }: SiteDet
                   Top Findings
                 </p>
                 <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-                  {CLAUSES[site.risk].slice(0, 3).map(c => (
+                  {(topFindingsFromLive.length
+                    ? topFindingsFromLive.map((f, index) => ({
+                        id: index + 1,
+                        level: toModalRisk(f.risk),
+                        text: f.text,
+                      }))
+                    : CLAUSES[riskLevel].slice(0, 3)
+                  ).map(c => (
                     <div
                       key={c.id}
                       className="sdm-row"
@@ -601,7 +706,7 @@ export default function SiteDetailModal({ site, onClose, onSaveToggle }: SiteDet
                         boxShadow: "0 1px 3px rgba(28,13,6,0.05)",
                       }}
                     >
-                      <RiskDot level={c.level} size={8} marginTop={5} />
+                      <RiskDot level={toModalRisk(String(c.level))} size={8} marginTop={5} />
                       <p style={{
                         fontSize: 12.5, color: P.choco, lineHeight: 1.5, margin: 0,
                       }}>

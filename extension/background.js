@@ -4,6 +4,7 @@
 const tabRisk = {}; // tabId -> "high" | "med" | "low" | "scanning" | null
 const PIPELINE_API_URL = "https://your-vercel-domain.vercel.app/api/scrape";
 const RAILWAY_SCRAPE_SIMPLE_URL = "https://policylens-production.up.railway.app/scrape/simple";
+const POLICY_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 chrome.runtime.onInstalled.addListener(() => {
   console.log("[PolicyLens] Extension installed.");
@@ -52,22 +53,35 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     fetchPolicyPipeline(hostname)
       .then((result) => {
-        tabRisk[sender.tab.id] = "low";
-        updateBadge(sender.tab.id, "low");
+        const nextRisk = normalizeRisk(result?.domain?.overall_risk_level || "low");
+        tabRisk[sender.tab.id] = nextRisk;
+        updateBadge(sender.tab.id, nextRisk);
+
+        try {
+          chrome.storage.local.set({
+            [`policy:${hostname}`]: {
+              hostname,
+              fetched_at: new Date().toISOString(),
+              ...result,
+            },
+          });
+        } catch {
+          // ignore storage failures in content flow
+        }
 
         chrome.tabs.sendMessage(sender.tab.id, {
           type: "POLICY_RESULT",
           ok: true,
           hostname,
-          policyUrl: result.policyUrl,
-          scraped: result.scraped,
+          risk: nextRisk,
+          result,
         }).catch(() => {});
 
         sendResponse({
           ok: true,
           hostname,
-          policyUrl: result.policyUrl,
-          scraped: result.scraped,
+          risk: nextRisk,
+          result,
         });
       })
       .catch((error) => {
@@ -86,6 +100,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     return true;
   }
+
+  if (msg.type === "OPEN_DASHBOARD") {
+    const target = msg.url || chrome.runtime.getURL("index.html");
+    chrome.tabs.create({ url: target }).then(() => sendResponse({ ok: true })).catch(() => sendResponse({ ok: false }));
+    return true;
+  }
 });
 
 function normalizeHostname(raw) {
@@ -101,23 +121,50 @@ function normalizeHostname(raw) {
   }
 }
 
-function fetchPolicyPipeline(hostname) {
+async function fetchPolicyPipeline(hostname) {
+  const cached = await getCachedPolicyIfFresh(hostname);
+  if (cached) {
+    return cached;
+  }
+
   if (/your-vercel-domain/.test(PIPELINE_API_URL)) {
     return runFallbackPipeline(hostname);
   }
 
-  return fetch(PIPELINE_API_URL, {
+  const resp = await fetch(PIPELINE_API_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ hostname }),
-  })
-    .then(async (resp) => {
-      const data = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        throw new Error(data.error || `Pipeline request failed (${resp.status})`);
-      }
-      return data;
-    });
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) {
+    throw new Error(data.error || `Pipeline request failed (${resp.status})`);
+  }
+  return data;
+}
+
+function getCachedPolicyIfFresh(hostname) {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get([`policy:${hostname}`], (res) => {
+        const cached = res?.[`policy:${hostname}`];
+        if (!cached || !cached.fetched_at) {
+          resolve(null);
+          return;
+        }
+
+        const ageMs = Date.now() - new Date(cached.fetched_at).getTime();
+        if (!Number.isFinite(ageMs) || ageMs > POLICY_CACHE_TTL_MS) {
+          resolve(null);
+          return;
+        }
+
+        resolve(cached);
+      });
+    } catch {
+      resolve(null);
+    }
+  });
 }
 
 async function runFallbackPipeline(hostname) {
@@ -177,4 +224,10 @@ function updateBadge(tabId, risk) {
   const entry = map[risk] || { text: "", color: "#6B7280" };
   chrome.action.setBadgeText({ tabId, text: entry.text });
   chrome.action.setBadgeBackgroundColor({ tabId, color: entry.color });
+}
+
+function normalizeRisk(input) {
+  const val = String(input || "").toLowerCase();
+  if (val === "high" || val === "med" || val === "low") return val;
+  return "low";
 }
