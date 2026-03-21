@@ -1,5 +1,5 @@
-import { analyzePolicyText, markClauseChanges } from "./_analysis";
-import { serverSupabase, type ClauseRisk } from "./_db";
+import { analyzePolicyText, markClauseChanges } from "./_analysis.js";
+import { serverSupabase, type ClauseRisk } from "./_db.js";
 
 type AnalyzeRequestBody = {
   domain?: string;

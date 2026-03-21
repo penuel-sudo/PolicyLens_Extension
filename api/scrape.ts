@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
-import { analyzePolicyText, markClauseChanges } from "./_analysis";
-import { RAILWAY_BASE_URL, serverSupabase, type ClauseRisk } from "./_db";
+import { analyzePolicyText, markClauseChanges } from "./_analysis.js";
+import { RAILWAY_BASE_URL, serverSupabase, type ClauseRisk } from "./_db.js";
 
 type PolicyType = "privacy" | "terms";
 

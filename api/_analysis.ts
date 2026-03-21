@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import type { AnalyzedClause, ClauseRisk, DocumentAnalysis } from "./_db";
+import type { AnalyzedClause, ClauseRisk, DocumentAnalysis } from "./_db.js";
 
 const CLAUSE_CATEGORIES = [
   "Data collection",
