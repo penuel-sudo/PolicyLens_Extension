@@ -1,5 +1,5 @@
 import { analyzePolicyText, markClauseChanges } from "./_analysis.js";
-import { serverSupabase, type ClauseRisk } from "./_db.js";
+import { getServerSupabase, type ClauseRisk } from "./_db.js";
 
 type AnalyzeRequestBody = {
   domain?: string;
@@ -34,6 +34,7 @@ export default async function handler(req: any, res: any) {
   if (req.method !== "POST") return json(res, 405, { error: "Method not allowed" });
 
   try {
+    const serverSupabase = getServerSupabase();
     const body = (req.body || {}) as AnalyzeRequestBody;
     const domain = normalizeDomain(body.domain || "");
 

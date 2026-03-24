@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 import { analyzePolicyText, markClauseChanges } from "./_analysis.js";
-import { RAILWAY_BASE_URL, serverSupabase, type ClauseRisk } from "./_db.js";
+import { RAILWAY_BASE_URL, getServerSupabase, type ClauseRisk } from "./_db.js";
 
 type PolicyType = "privacy" | "terms";
 
@@ -140,6 +140,7 @@ export default async function handler(req: any, res: any) {
   if (req.method !== "POST") return json(res, 405, { error: "Method not allowed" });
 
   try {
+    const serverSupabase = getServerSupabase();
     const body = (req.body || {}) as ScrapeRequestBody;
     const hostname = normalizeHostname(body.hostname || "");
 
