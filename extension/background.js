@@ -2,7 +2,7 @@
 // Manages risk state per tab and relays messages to/from content scripts.
 
 const tabRisk = {}; // tabId -> "high" | "med" | "low" | "scanning" | null
-const PIPELINE_API_URL = "https://your-vercel-domain.vercel.app/api/scrape";
+const PIPELINE_API_URL = "https://policy-lens-extension.vercel.app/api/scrape";
 const RAILWAY_SCRAPE_SIMPLE_URL = "https://policylens-production.up.railway.app/scrape/simple";
 const POLICY_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
