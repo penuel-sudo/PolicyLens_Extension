@@ -100,6 +100,9 @@
       align-items: center;
       gap: 6px;
       border-radius: 999px;
+      border: 1px solid #f7b2ab;
+      background: #fff2f0;
+      color: #b42318;
       padding: 4px 9px;
       font-family: 'DM Sans', sans-serif;
       font-size: 10px;
@@ -107,10 +110,6 @@
       letter-spacing: .03em;
       text-transform: uppercase;
     }
-
-    .risk-badge.high { border: 1px solid #f7b2ab; background: #fff2f0; color: #b42318; }
-    .risk-badge.med { border: 1px solid #fde2b2; background: #fff8ed; color: #b45309; }
-    .risk-badge.low { border: 1px solid #b7e3c7; background: #effcf4; color: #166534; }
 
     .risk-dot {
       width: 6px;
@@ -270,7 +269,7 @@
     .popup-btn-secondary:hover { background: rgba(92,61,46,.14); color: var(--text); }
   `;
 
-  const FALLBACK_ITEMS = [
+  const ITEMS = [
     {
       dot: "high",
       text: "Your data may be sold to third-party advertisers without explicit consent.",
@@ -288,8 +287,6 @@
     },
   ];
 
-  const MAX_ITEMS = 3;
-
   const root = document.getElementById("root");
   if (!root) return;
 
@@ -300,11 +297,11 @@
   const popup = document.createElement("div");
   popup.className = "popup";
 
-  const hostname = (() => {
+  const currentUrl = (() => {
     try {
-      return new URL(document.referrer).hostname;
+      return new URL(document.referrer).hostname + "/privacy-policy";
     } catch {
-      return "acmecorp.com";
+      return "acmecorp.com/privacy-policy";
     }
   })();
 
@@ -318,7 +315,7 @@
         </div>
         <span class="popup-logo-name">PolicyLens</span>
       </div>
-      <span class="risk-badge high"><span class="risk-dot high"></span>HIGH RISK</span>
+      <span class="risk-badge"><span class="risk-dot high"></span>HIGH RISK</span>
     </div>
 
     <div class="popup-url">
@@ -331,7 +328,7 @@
       <span class="popup-url-text"></span>
     </div>
 
-    <div class="popup-section-title">Key clauses found (0)</div>
+    <div class="popup-section-title">Key clauses found (12)</div>
     <div class="popup-items"></div>
 
     <div class="popup-footer">
@@ -343,82 +340,19 @@
   root.appendChild(popup);
 
   const urlText = popup.querySelector(".popup-url-text");
-  const sectionTitle = popup.querySelector(".popup-section-title");
-  const riskBadge = popup.querySelector(".risk-badge");
-  const fullReportBtn = popup.querySelector(".popup-btn-primary");
-
-  let policyResult = null;
-  let items = [...FALLBACK_ITEMS];
-  let openIndex = 0;
-
-  function normalizeRisk(input) {
-    const v = String(input || "").toLowerCase();
-    if (v === "high" || v === "med" || v === "low") return v;
-    return "low";
-  }
-
-  function setRiskBadge(risk) {
-    if (!riskBadge) return;
-    const level = normalizeRisk(risk);
-    const label = level === "high" ? "HIGH RISK" : level === "med" ? "MED RISK" : "LOW RISK";
-    riskBadge.className = `risk-badge ${level}`;
-    riskBadge.innerHTML = `<span class="risk-dot ${level}"></span>${label}`;
-  }
-
-  function buildItemsFromResult(result) {
-    const findings = Array.isArray(result?.domain?.top_findings) ? result.domain.top_findings : [];
-    if (findings.length) {
-      return findings.slice(0, MAX_ITEMS).map((f) => ({
-        dot: normalizeRisk(f?.risk),
-        text: String(f?.text || "Policy finding"),
-        why: String(f?.why_it_matters || "Important policy point for user awareness."),
-      }));
-    }
-
-    const documents = Array.isArray(result?.documents) ? result.documents : [];
-    const clauses = documents.flatMap((d) => (Array.isArray(d?.clauses) ? d.clauses : []));
-    if (!clauses.length) return [...FALLBACK_ITEMS];
-
-    return clauses.slice(0, MAX_ITEMS).map((c) => ({
-      dot: normalizeRisk(c?.risk),
-      text: String(c?.text || "Policy clause"),
-      why: String(c?.why_it_matters || "Important policy point for user awareness."),
-    }));
-  }
-
-  function updateHeaderFromResult(result) {
-    const docs = Array.isArray(result?.domain?.docs_found) ? result.domain.docs_found : [];
-    const documents = Array.isArray(result?.documents) ? result.documents : [];
-    const firstDocUrl = documents.find((d) => typeof d?.url === "string" && d.url)?.url || "";
-    if (urlText) {
-      if (firstDocUrl) {
-        try {
-          const parsed = new URL(firstDocUrl);
-          urlText.textContent = `${parsed.hostname}${parsed.pathname}`;
-        } catch {
-          urlText.textContent = `${hostname}/privacy-policy`;
-        }
-      } else {
-        urlText.textContent = `${hostname}/${docs.includes("terms") ? "terms" : "privacy-policy"}`;
-      }
-    }
-
-    if (sectionTitle) {
-      const totalClauses = documents.reduce((sum, d) => sum + (Array.isArray(d?.clauses) ? d.clauses.length : 0), 0);
-      sectionTitle.textContent = `Key clauses found (${totalClauses || items.length})`;
-    }
-
-    setRiskBadge(result?.domain?.overall_risk_level);
+  if (urlText) {
+    urlText.textContent = currentUrl;
   }
 
   const itemsEl = popup.querySelector(".popup-items");
+  let openIndex = 0;
 
   function renderItems() {
     if (!itemsEl) return;
 
     itemsEl.innerHTML = "";
 
-    items.forEach((item, idx) => {
+    ITEMS.forEach((item, idx) => {
       const row = document.createElement("div");
       row.className = "popup-item";
 
@@ -471,31 +405,6 @@
     });
   }
 
-  function loadLivePolicy() {
-    try {
-      chrome.storage.local.get([`policy:${hostname}`], (res) => {
-        policyResult = res?.[`policy:${hostname}`] || null;
-        if (policyResult) {
-          items = buildItemsFromResult(policyResult);
-          openIndex = items.length ? 0 : -1;
-          updateHeaderFromResult(policyResult);
-          renderItems();
-          reportHeight();
-        } else {
-          if (urlText) urlText.textContent = `${hostname}/privacy-policy`;
-          setRiskBadge("low");
-          renderItems();
-          reportHeight();
-        }
-      });
-    } catch {
-      if (urlText) urlText.textContent = `${hostname}/privacy-policy`;
-      setRiskBadge("low");
-      renderItems();
-      reportHeight();
-    }
-  }
-
   function reportHeight() {
     const height = popup.scrollHeight;
     window.parent.postMessage({ type: "PL_RESIZE", height }, "*");
@@ -504,14 +413,7 @@
   const ro = new ResizeObserver(reportHeight);
   ro.observe(popup);
 
-  if (fullReportBtn) {
-    fullReportBtn.addEventListener("click", () => {
-      const target = chrome.runtime.getURL("index.html");
-      chrome.runtime.sendMessage({ type: "OPEN_DASHBOARD", url: target }, () => {});
-    });
-  }
-
-  loadLivePolicy();
+  renderItems();
   requestAnimationFrame(reportHeight);
   setTimeout(reportHeight, 40);
 })();

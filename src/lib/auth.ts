@@ -19,14 +19,6 @@ export interface AuthResponse {
   requiresConfirmation?: boolean;
 }
 
-function getAuthRedirectUrl(path: string): string {
-  const configuredBase = String(import.meta.env.VITE_PUBLIC_APP_URL || "").trim().replace(/\/+$/, "");
-  const runtimeBase = typeof window !== "undefined" ? window.location.origin : "";
-  const base = configuredBase || runtimeBase;
-  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  return `${base}${normalizedPath}`;
-}
-
 /**
  * Sign up a new user with email and password
  * Creates both auth account and user profile
@@ -108,7 +100,7 @@ export async function signIn(data: SignInData): Promise<AuthResponse> {
  */
 export async function requestPasswordReset(email: string): Promise<AuthResponse> {
   try {
-    const redirectTo = getAuthRedirectUrl("/login");
+    const redirectTo = `${window.location.origin}/login`;
     const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo });
 
     if (error) {

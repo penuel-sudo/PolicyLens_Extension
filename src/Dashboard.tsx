@@ -7,7 +7,6 @@ import { useNavigate, Navigate } from "react-router-dom";
 import { signOut } from "./lib/auth";
 import { supabase } from "./lib/supabase";
 import { isOnboardingComplete } from "./lib/userPrefs";
-import { listPolicyDomains, toggleSavedDomain, type PolicyDomainRow } from "./lib/policyData";
 import SiteDetailModal from "./components/SiteDetailModal";
 
 // ─── types ───────────────────────────────────────────────────────────────────
@@ -20,6 +19,27 @@ interface SiteRow {
   date: string;
   saved?: boolean;
 }
+
+// ─── mock data ────────────────────────────────────────────────────────────────
+const ALL_ROWS: SiteRow[] = [
+  { site: "google.com",    type: "Privacy Policy",   risk: "high", clauses: 12, date: "Today",     saved: true  },
+  { site: "shopify.com",   type: "Terms of Service", risk: "med",  clauses: 8,  date: "Yesterday", saved: false },
+  { site: "notion.so",     type: "Cookie Banner",    risk: "low",  clauses: 4,  date: "Feb 17",    saved: false },
+  { site: "reddit.com",    type: "Privacy Policy",   risk: "high", clauses: 15, date: "Feb 16",    saved: true  },
+  { site: "stripe.com",    type: "Data Processing",  risk: "low",  clauses: 6,  date: "Feb 15",    saved: false },
+  { site: "twitter.com",   type: "Privacy Policy",   risk: "high", clauses: 18, date: "Feb 14",    saved: false },
+  { site: "linkedin.com",  type: "Terms of Service", risk: "med",  clauses: 11, date: "Feb 13",    saved: true  },
+  { site: "amazon.com",    type: "Privacy Policy",   risk: "high", clauses: 21, date: "Feb 12",    saved: false },
+  { site: "dropbox.com",   type: "Data Processing",  risk: "low",  clauses: 5,  date: "Feb 11",    saved: false },
+  { site: "figma.com",     type: "Cookie Banner",    risk: "med",  clauses: 7,  date: "Feb 10",    saved: true  },
+];
+
+const STATS = [
+  { val: "47",   label: "Sites Analyzed",  trend: "+6 this week"     },
+  { val: "12",   label: "High Risk Sites", trend: "↑ 2 new"          },
+  { val: "183",  label: "Clauses Flagged", trend: "across all sites" },
+  { val: "3.2k", label: "Users Protected", trend: "globally today"   },
+];
 
 const SIDEBAR_FILTERS = ["All Sites", "Today", "This Week", "High Risk", "Favorites"] as const;
 type SidebarFilter = typeof SIDEBAR_FILTERS[number];
@@ -529,50 +549,13 @@ function siteInitials(site: string) {
   return site.replace("www.", "").substring(0, 2).toUpperCase();
 }
 
-function formatDateLabel(input: string | null | undefined): string {
-  if (!input) return "-";
-  const dt = new Date(input);
-  if (Number.isNaN(dt.getTime())) return "-";
-
-  const now = new Date();
-  const oneDay = 24 * 60 * 60 * 1000;
-  const diffDays = Math.floor((
-    new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() -
-    new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime()
-  ) / oneDay);
-
-  if (diffDays === 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  return dt.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-function formatDocsFound(docsFound: string[]): string {
-  const hasPrivacy = docsFound.includes("privacy");
-  const hasTerms = docsFound.includes("terms");
-  if (hasPrivacy && hasTerms) return "Privacy + Terms";
-  if (hasPrivacy) return "Privacy only";
-  if (hasTerms) return "Terms only";
-  return "Unknown";
-}
-
-function mapPolicyDomainToSiteRow(row: PolicyDomainRow): SiteRow {
-  return {
-    site: row.domain,
-    type: formatDocsFound(row.docs_found),
-    risk: row.overall_risk_level,
-    clauses: row.total_clauses,
-    date: formatDateLabel(row.last_analyzed_at || row.updated_at),
-    saved: row.saved,
-  };
-}
-
 function filterRows(rows: SiteRow[], tab: TopTab, sidebar: SidebarFilter, query: string): SiteRow[] {
   let r = [...rows];
   if (tab === "High Risk") r = r.filter(x => x.risk === "high");
   if (tab === "Saved")     r = r.filter(x => x.saved);
   if (tab === "Reports")   r = [];
   if (sidebar === "Today")      r = r.filter(x => x.date === "Today");
-  if (sidebar === "This Week")  r = r.filter(x => ["Today", "Yesterday"].includes(x.date));
+  if (sidebar === "This Week")  r = r.filter(x => ["Today", "Yesterday", "Feb 17", "Feb 16", "Feb 15"].includes(x.date));
   if (sidebar === "High Risk")  r = r.filter(x => x.risk === "high");
   if (sidebar === "Favorites")  r = r.filter(x => x.saved);
   if (query.trim()) r = r.filter(x => x.site.toLowerCase().includes(query.trim().toLowerCase()));
@@ -585,7 +568,7 @@ export default function Dashboard() {
   const [tab,  setTab]    = useState<TopTab>("Recent");
   const [side, setSide]   = useState<SidebarFilter>("All Sites");
   const [query, setQuery] = useState("");
-  const [rows, setRows]   = useState<SiteRow[]>([]);
+  const [rows, setRows]   = useState<SiteRow[]>(ALL_ROWS);
   const [selectedSite, setSelectedSite] = useState<SiteRow | null>(null);
   const [notifOpen, setNotifOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -596,20 +579,12 @@ export default function Dashboard() {
   // "loading" | "login" | "onboarding" | "ready"
   const [status, setStatus] = useState<"loading" | "login" | "onboarding" | "ready">("loading");
 
-  async function refreshRowsFromDb() {
-    const domainRows = await listPolicyDomains();
-    setRows(domainRows.map(mapPolicyDomainToSiteRow));
-  }
-
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
       if (!data.session) { setStatus("login"); return; }
       const done = await isOnboardingComplete();
       setStatus(done ? "ready" : "onboarding");
-
-      await refreshRowsFromDb();
-
       // load user profile for sidebar dropdown
       const { data: profile } = await supabase
         .from("profiles")
@@ -618,41 +593,6 @@ export default function Dashboard() {
         .single();
       if (profile) setUser({ name: profile.name || "", email: profile.email || data.session.user.email || "" });
     })().catch(() => setStatus("login"));
-  }, []);
-
-  useEffect(() => {
-    const refreshSafe = () => {
-      refreshRowsFromDb().catch(() => {});
-    };
-
-    const onFocus = () => refreshSafe();
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") refreshSafe();
-    };
-
-    window.addEventListener("focus", onFocus);
-    document.addEventListener("visibilitychange", onVisibility);
-
-    const maybeChrome = (window as any)?.chrome;
-    const storageListener = (changes: Record<string, unknown>, areaName: string) => {
-      if (areaName !== "local") return;
-      const changedKeys = Object.keys(changes || {});
-      if (changedKeys.some((key) => key.startsWith("policy:"))) {
-        refreshSafe();
-      }
-    };
-
-    if (maybeChrome?.storage?.onChanged?.addListener) {
-      maybeChrome.storage.onChanged.addListener(storageListener);
-    }
-
-    return () => {
-      window.removeEventListener("focus", onFocus);
-      document.removeEventListener("visibilitychange", onVisibility);
-      if (maybeChrome?.storage?.onChanged?.removeListener) {
-        maybeChrome.storage.onChanged.removeListener(storageListener);
-      }
-    };
   }, []);
 
   // close dropdowns when clicking outside
@@ -676,22 +616,8 @@ export default function Dashboard() {
 
   const visible = filterRows(rows, tab, side, query);
 
-  const stats = [
-    { val: String(rows.length), label: "Sites Analyzed", trend: "live from pipeline" },
-    { val: String(rows.filter((r) => r.risk === "high").length), label: "High Risk Sites", trend: "current snapshot" },
-    { val: String(rows.reduce((sum, row) => sum + row.clauses, 0)), label: "Clauses Flagged", trend: "across all sites" },
-    { val: String(rows.filter((r) => r.saved).length), label: "Saved Sites", trend: "starred in dashboard" },
-  ];
-
   function toggleSaved(site: string) {
-    setRows((prev) =>
-      prev.map((row) => {
-        if (row.site !== site) return row;
-        const nextSaved = !row.saved;
-        toggleSavedDomain(site, nextSaved).catch(() => {});
-        return { ...row, saved: nextSaved };
-      }),
-    );
+    setRows(prev => prev.map(r => r.site === site ? { ...r, saved: !r.saved } : r));
   }
 
   return (
@@ -805,11 +731,11 @@ export default function Dashboard() {
             <div className="db-sidebar-section-label">Filter</div>
             {SIDEBAR_FILTERS.map(item => {
               const count =
-                item === "All Sites"  ? rows.length :
-                item === "Today"      ? rows.filter(r => r.date === "Today").length :
-                item === "This Week"  ? rows.filter(r => ["Today","Yesterday"].includes(r.date)).length :
-                item === "High Risk"  ? rows.filter(r => r.risk === "high").length :
-                item === "Favorites"  ? rows.filter(r => r.saved).length : 0;
+                item === "All Sites"  ? ALL_ROWS.length :
+                item === "Today"      ? ALL_ROWS.filter(r => r.date === "Today").length :
+                item === "This Week"  ? ALL_ROWS.filter(r => ["Today","Yesterday","Feb 17","Feb 16","Feb 15"].includes(r.date)).length :
+                item === "High Risk"  ? ALL_ROWS.filter(r => r.risk === "high").length :
+                item === "Favorites"  ? ALL_ROWS.filter(r => r.saved).length : 0;
 
               return (
                 <div
@@ -827,7 +753,7 @@ export default function Dashboard() {
             {/* explicit spacer for vertical separation */}
             <div style={{ height: 40 }} />
             <div className="db-sidebar-section-label">Recent Sites</div>
-            {rows.slice(0, 5).map((r, i) => (
+            {ALL_ROWS.slice(0, 5).map((r, i) => (
               <div key={i} className="db-sidebar-item" style={{ fontSize: 11 }}>
                 <div className="db-sidebar-dot" style={{ background: r.risk === "high" ? "#F87171" : r.risk === "med" ? "#FCD34D" : "var(--green-muted)" }} />
                 {r.site}
@@ -853,7 +779,7 @@ export default function Dashboard() {
 
               {/* stats */}
               <div className="db-stats">
-                {stats.map((s, i) => (
+                {STATS.map((s, i) => (
                   <div key={i} className="db-stat">
                     <div className="db-stat-val">{s.val}</div>
                     <div className="db-stat-label">{s.label}</div>
@@ -886,7 +812,7 @@ export default function Dashboard() {
                     <div className="db-empty-icon"><TrendingUp size={24} /></div>
                     <div className="db-empty-title">No results</div>
                     <div className="db-empty-desc">
-                      {query ? `No sites match "${query}".` : "No analyzed domains yet. Visit a site so the extension can run the policy pipeline."}
+                      {query ? `No sites match "${query}".` : "No sites match this filter."}
                     </div>
                   </div>
                 ) : (
@@ -894,7 +820,7 @@ export default function Dashboard() {
                     <thead>
                       <tr>
                         <th>Site</th>
-                        <th>Docs Found</th>
+                        <th>Type</th>
                         <th>Risk</th>
                         <th>Clauses</th>
                         <th>Analyzed</th>

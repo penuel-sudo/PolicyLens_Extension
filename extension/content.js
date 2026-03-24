@@ -358,8 +358,8 @@
       if (msg.type === "RISK_UPDATE") setRisk(msg.risk);
       if (msg.type === "POLICY_RESULT") {
         if (msg.ok) {
-          setRisk(msg.risk || "low");
-          console.log("[PolicyLens] Policy pipeline complete:", msg.result?.domain || msg.hostname);
+          setRisk("low");
+          console.log("[PolicyLens] Policy scraped:", msg.policyUrl);
         } else {
           setRisk("idle");
           console.warn("[PolicyLens] Policy pipeline failed:", msg.error);
